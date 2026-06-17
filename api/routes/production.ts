@@ -19,11 +19,11 @@ router.get('/wells', (req: AuthRequest, res: Response): void => {
       wells = wells.filter((w) => w.status === status)
     }
 
-    if (user.role === 'oil_worker' || user.role === 'team_leader') {
+    if (user.role === 'oil_worker') {
+      wells = wells.filter((w) => w.workerId === user.id)
+    } else if (user.role === 'team_leader') {
       if (user.teamId) {
         wells = wells.filter((w) => w.teamId === user.teamId)
-      } else if (user.blockId) {
-        wells = wells.filter((w) => w.blockId === user.blockId)
       }
     } else if (user.role === 'block_manager' && user.blockId) {
       wells = wells.filter((w) => w.blockId === user.blockId)
@@ -61,7 +61,15 @@ router.get('/wells/:id/sensor-data', (req: AuthRequest, res: Response): void => 
     }
 
     const user = req.user!
-    if (user.role === 'oil_worker' || user.role === 'team_leader') {
+    if (user.role === 'oil_worker') {
+      if (well.workerId !== user.id) {
+        res.status(403).json({
+          success: false,
+          error: '无权访问此井口数据',
+        })
+        return
+      }
+    } else if (user.role === 'team_leader') {
       if (user.teamId && well.teamId !== user.teamId) {
         res.status(403).json({
           success: false,

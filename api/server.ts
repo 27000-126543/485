@@ -4,6 +4,7 @@ import { store } from './data/store.js';
 import { startSensorTimer } from './timers/sensorUpdate.js';
 import { startApprovalEscalationTimer } from './timers/approvalEscalation.js';
 import { startTicketUpgradeTimer } from './timers/ticketUpgrade.js';
+import { startStockCheckTimer } from './timers/stockCheck.js';
 import { initWebSocketServer } from './ws/realtime.js';
 
 const PORT = process.env.PORT || 3001;
@@ -20,6 +21,7 @@ initWebSocketServer(server);
 const sensorTimer = startSensorTimer();
 const approvalTimer = startApprovalEscalationTimer();
 const ticketTimer = startTicketUpgradeTimer();
+const stockTimer = startStockCheckTimer();
 
 server.listen(PORT, () => {
   console.log(`Server ready on port ${PORT}`);
@@ -34,6 +36,7 @@ function gracefulShutdown(signal: string): void {
   clearInterval(sensorTimer);
   clearInterval(approvalTimer);
   clearInterval(ticketTimer);
+  clearInterval(stockTimer);
   console.log('[Server] All timers stopped');
 
   server.close(() => {

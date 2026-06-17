@@ -627,6 +627,23 @@ class GlobalDataStore {
     return this.getData().safetyAlerts.find((a) => a.id === id);
   }
 
+  public createSafetyAlert(data: Omit<SafetyAlert, 'id' | 'code' | 'acknowledged' | 'resolved' | 'createdAt' | 'updatedAt'>): SafetyAlert {
+    const list = this.getData().safetyAlerts;
+    const now = new Date().toISOString();
+    const nextNum = list.length + 1;
+    const alert: SafetyAlert = {
+      ...data,
+      id: generateIdHelper(),
+      code: `ALT-${new Date().getFullYear()}${String(nextNum).padStart(5, '0')}`,
+      acknowledged: false,
+      resolved: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    list.push(alert);
+    return alert;
+  }
+
   public updateSafetyAlert(id: string, patch: Partial<SafetyAlert>): SafetyAlert | undefined {
     const list = this.getData().safetyAlerts;
     const idx = list.findIndex((a) => a.id === id);

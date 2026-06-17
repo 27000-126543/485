@@ -81,7 +81,7 @@ router.get('/stats', (req: AuthRequest, res: Response): void => {
       })
 
     const alerts = allAlerts
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 10)
       .map(a => ({
         id: a.id,
@@ -89,7 +89,7 @@ router.get('/stats', (req: AuthRequest, res: Response): void => {
         title: a.title,
         description: a.description,
         source: '安全监测系统',
-        time: a.timestamp,
+        time: a.createdAt,
       }))
 
     const data = {
@@ -132,7 +132,6 @@ router.post('/export-report', (req: AuthRequest, res: Response): void => {
       return
     }
 
-    const stats = store.getDashboardStats()
     const targetDate = new Date(month)
     const monthStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`
 
@@ -140,38 +139,87 @@ router.post('/export-report', (req: AuthRequest, res: Response): void => {
     if (blockId) {
       blocks = blocks.filter((b) => b.id === blockId)
     }
+    const allTanks = store.getData().tanks
 
-    const headers = ['区块', '油井数', '日产油量(吨)', '月产油量(吨)', '累计产量(吨)', '活跃告警数', '活跃工单']
+    const headers = ['区块', '油井数', '日产油量(吨)', '月产油量(吨)', '井口完好率(%)', '平均储罐液位(%)', '紧急告警数', '危险告警数', '警告数', '提示数', '活跃工单']
     const rows: string[][] = []
+
+    let totalWells = 0
+    let totalDailyProduction = 0
+    let totalIntegritySum = 0
+    let totalIntegrityCount = 0
+    let totalTankLevelSum = 0
+    let totalTankLevelCount = 0
+    let totalCriticalAlerts = 0
+    let totalDangerAlerts = 0
+    let totalWarningAlerts = 0
+    let totalInfoAlerts = 0
+    let totalActiveWorkOrders = 0
 
     blocks.forEach((block) => {
       const wells = store.getWells(block.id)
       const daily = wells.reduce((sum, w) => sum + w.dailyProduction, 0)
       const monthly = daily * 30
-      const cumulative = wells.reduce((sum, w) => sum + w.cumulativeProduction, 0)
-      const alerts = store.getSafetyAlerts(block.id).filter((a) => !a.resolved).length
+      const integritySum = wells.reduce((sum, w) => sum + w.integrityRate, 0)
+      const integrityAvg = wells.length > 0 ? integritySum / wells.length : 0
+
+      const blockTanks = allTanks.filter((t) => t.blockId === block.id)
+      const tankLevelSum = blockTanks.reduce((sum, t) => sum + (t.currentLevel / t.capacity * 100), 0)
+      const tankLevelAvg = blockTanks.length > 0 ? tankLevelSum / blockTanks.length : 0
+
+      const allAlerts = store.getSafetyAlerts(block.id)
+      const activeAlerts = allAlerts.filter((a) => !a.resolved)
+      const criticalCount = activeAlerts.filter((a) => a.level === 'critical').length
+      const dangerCount = activeAlerts.filter((a) => a.level === 'danger').length
+      const warningCount = activeAlerts.filter((a) => a.level === 'warning').length
+      const infoCount = activeAlerts.filter((a) => a.level === 'info').length
+
       const workOrders = store.getWorkOrders(undefined, block.id).filter(
         (o) => o.status === 'in_progress' || o.status === 'pending'
       ).length
+
+      totalWells += wells.length
+      totalDailyProduction += daily
+      totalIntegritySum += integritySum
+      totalIntegrityCount += wells.length
+      totalTankLevelSum += tankLevelSum
+      totalTankLevelCount += blockTanks.length
+      totalCriticalAlerts += criticalCount
+      totalDangerAlerts += dangerCount
+      totalWarningAlerts += warningCount
+      totalInfoAlerts += infoCount
+      totalActiveWorkOrders += workOrders
+
       rows.push([
         block.name,
         String(wells.length),
         daily.toFixed(2),
         monthly.toFixed(2),
-        cumulative.toFixed(2),
-        String(alerts),
+        integrityAvg.toFixed(1),
+        tankLevelAvg.toFixed(1),
+        String(criticalCount),
+        String(dangerCount),
+        String(warningCount),
+        String(infoCount),
         String(workOrders),
       ])
     })
 
+    const avgIntegrityAll = totalIntegrityCount > 0 ? totalIntegritySum / totalIntegrityCount : 0
+    const avgTankLevelAll = totalTankLevelCount > 0 ? totalTankLevelSum / totalTankLevelCount : 0
+
     rows.push([
-      '合计',
-      String(store.getWells(blockId).length || stats.totalWells),
-      String((blockId ? store.getWells(blockId).reduce((s, w) => s + w.dailyProduction, 0) : stats.dailyProduction).toFixed(2)),
-      String((blockId ? store.getWells(blockId).reduce((s, w) => s + w.dailyProduction, 0) * 30 : stats.monthlyProduction).toFixed(2)),
-      String((blockId ? store.getWells(blockId).reduce((s, w) => s + w.cumulativeProduction, 0) : stats.cumulativeProduction).toFixed(2)),
-      String(stats.activeAlerts),
-      String(stats.activeWorkOrders),
+      '合计/平均',
+      String(totalWells),
+      totalDailyProduction.toFixed(2),
+      (totalDailyProduction * 30).toFixed(2),
+      avgIntegrityAll.toFixed(1),
+      avgTankLevelAll.toFixed(1),
+      String(totalCriticalAlerts),
+      String(totalDangerAlerts),
+      String(totalWarningAlerts),
+      String(totalInfoAlerts),
+      String(totalActiveWorkOrders),
     ])
 
     const csvContent = [headers, ...rows].map((r) => r.join(',')).join('\n')
@@ -186,10 +234,38 @@ router.post('/export-report', (req: AuthRequest, res: Response): void => {
           headers,
           rows,
           summary: {
-            totalWells: stats.totalWells,
-            dailyProduction: stats.dailyProduction,
-            monthlyProduction: stats.monthlyProduction,
+            totalWells,
+            dailyProduction: +totalDailyProduction.toFixed(2),
+            monthlyProduction: +(totalDailyProduction * 30).toFixed(2),
+            avgIntegrityRate: +avgIntegrityAll.toFixed(1),
+            avgTankLevel: +avgTankLevelAll.toFixed(1),
+            alertCounts: {
+              critical: totalCriticalAlerts,
+              danger: totalDangerAlerts,
+              warning: totalWarningAlerts,
+              info: totalInfoAlerts,
+            },
+            activeWorkOrders: totalActiveWorkOrders,
           },
+          blockProductions: blocks.map((b) => ({
+            blockId: b.id,
+            blockName: b.name,
+            daily: Math.round(store.getWells(b.id).reduce((s, w) => s + w.dailyProduction, 0)),
+            monthly: Math.round(store.getWells(b.id).reduce((s, w) => s + w.dailyProduction, 0) * 30),
+          })),
+          blockIntegrities: blocks.map((b) => {
+            const bWells = store.getWells(b.id)
+            const rate = bWells.length > 0 ? bWells.reduce((s, w) => s + w.integrityRate, 0) / bWells.length : 0
+            return { blockId: b.id, blockName: b.name, rate: Math.round(rate * 10) / 10 }
+          }),
+          tankLevels: allTanks
+            .filter((t) => !blockId || t.blockId === blockId)
+            .map((t) => ({
+              id: t.id,
+              name: t.name,
+              level: Math.round(t.currentLevel / t.capacity * 100),
+              capacity: t.capacity,
+            })),
         },
       })
       return

@@ -115,13 +115,38 @@ router.get('/materials', (req: AuthRequest, res: Response): void => {
       stocks = stocks.filter((s) => s.currentStock <= s.minStock)
     }
 
+    const pendingPRs = store.getPurchaseRequests().filter(
+      (p) => p.status !== 'rejected' && p.status !== 'received'
+    )
+
     res.json({
       success: true,
-      data: stocks.map((s) => ({
-        ...s,
-        isLowStock: s.currentStock <= s.minStock,
-        stockRate: Math.round((s.currentStock / s.maxStock) * 100),
-      })),
+      data: stocks.map((s) => {
+        const relatedPRs = pendingPRs.filter(
+          (p) => p.items.some((it) => it.materialId === s.id) || p.triggeredByMaterialId === s.id
+        )
+        return {
+          ...s,
+          isLowStock: s.currentStock <= s.minStock,
+          stockRate: Math.round((s.currentStock / s.maxStock) * 100),
+          purchaseWarning: s.currentStock <= s.minStock,
+          warningLevel:
+            s.currentStock <= s.minStock * 0.3
+              ? 'critical'
+              : s.currentStock <= s.minStock * 0.6
+              ? 'high'
+              : s.currentStock <= s.minStock
+              ? 'medium'
+              : 'none',
+          relatedPurchaseRequests: relatedPRs.map((p) => ({
+            id: p.id,
+            code: p.code,
+            status: p.status,
+            urgency: p.urgency,
+            totalQuantity: p.items.reduce((sum, it) => sum + it.quantity, 0),
+          })),
+        }
+      }),
     })
   } catch (err) {
     res.status(500).json({
@@ -200,7 +225,7 @@ router.post('/purchase-requests', requirePermission('drilling', 'create'), (req:
 router.put('/purchase-requests/:id/approve', requirePermission('drilling', 'approve'), (req: AuthRequest, res: Response): void => {
   try {
     const { id } = req.params
-    const { status, comment } = req.body
+    const { status, comment, approvalLevel } = req.body
 
     const pr = store.findPurchaseRequestById(id)
     if (!pr) {
@@ -219,19 +244,102 @@ router.put('/purchase-requests/:id/approve', requirePermission('drilling', 'appr
       return
     }
 
-    const validStatuses: PurchaseRequestStatus[] = ['submitted', 'approved', 'rejected', 'ordered', 'received']
-    const newStatus: PurchaseRequestStatus = status && validStatuses.includes(status) ? status : 'approved'
+    const user = req.user!
+    const now = new Date().toISOString()
+    let patch: Record<string, any> = {}
 
-    const updated = store.updatePurchaseRequest(id, {
-      status: newStatus,
-      approvedBy: newStatus === 'approved' ? req.user!.id : pr.approvedBy,
-      notes: comment ? (pr.notes ? pr.notes + '\n' + comment : comment) : pr.notes,
-    })
+    const canFirstApprove = ['block_manager', 'chief_engineer', 'hq_admin'].includes(user.role)
+    const canSecondApprove = ['supply_manager', 'hq_admin'].includes(user.role)
+
+    if (pr.status === 'submitted') {
+      if (!canFirstApprove && !canSecondApprove) {
+        res.status(403).json({
+          success: false,
+          error: '您无权进行第一级审批（需要区块主管、总工程师或总部管理员）',
+        })
+        return
+      }
+
+      if (status === 'rejected') {
+        patch = {
+          status: 'rejected',
+          firstApprovedBy: user.id,
+          firstApprovedAt: now,
+          firstApprovalComment: comment || '第一级审批驳回',
+          approvedBy: user.id,
+        }
+      } else {
+        if (user.role === 'hq_admin') {
+          patch = {
+            status: 'approved',
+            firstApprovedBy: user.id,
+            firstApprovedAt: now,
+            firstApprovalComment: comment || '总部管理员直接审批通过',
+            secondApprovedBy: user.id,
+            secondApprovedAt: now,
+            secondApprovalComment: comment || '总部管理员直接审批通过',
+            approvedBy: user.id,
+          }
+        } else if (canSecondApprove && !canFirstApprove) {
+          patch = {
+            status: 'first_approved',
+            firstApprovedBy: user.id,
+            firstApprovedAt: now,
+            firstApprovalComment: comment || '物供经理代行主管一级审批',
+          }
+        } else {
+          patch = {
+            status: 'first_approved',
+            firstApprovedBy: user.id,
+            firstApprovedAt: now,
+            firstApprovalComment: comment || '主管审批通过，等待物供经理二级审批',
+          }
+        }
+      }
+    } else if (pr.status === 'first_approved') {
+      if (!canSecondApprove) {
+        res.status(403).json({
+          success: false,
+          error: '您无权进行第二级审批（需要物供经理或总部管理员）',
+        })
+        return
+      }
+
+      if (status === 'rejected') {
+        patch = {
+          status: 'rejected',
+          secondApprovedBy: user.id,
+          secondApprovedAt: now,
+          secondApprovalComment: comment || '第二级审批驳回',
+        }
+      } else {
+        patch = {
+          status: 'approved',
+          secondApprovedBy: user.id,
+          secondApprovedAt: now,
+          secondApprovalComment: comment || '第二级审批通过',
+          approvedBy: user.id,
+        }
+      }
+    } else {
+      res.status(400).json({
+        success: false,
+        error: `当前状态为${pr.status}，不可审批。仅submitted和first_approved状态可审批。`,
+      })
+      return
+    }
+
+    if (comment) {
+      patch.notes = pr.notes ? pr.notes + '\n' + comment : comment
+    }
+
+    const updated = store.updatePurchaseRequest(id, patch)
 
     res.json({
       success: true,
       data: updated,
-      message: '审批成功',
+      message: `审批成功，当前状态：${patch.status}`,
+      approvalStage: patch.status === 'first_approved' ? 'first' : patch.status === 'approved' ? 'final' : 'rejected',
     })
   } catch (err) {
     res.status(500).json({

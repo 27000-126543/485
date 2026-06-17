@@ -78,9 +78,43 @@ router.get('/alerts', (req: AuthRequest, res: Response): void => {
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     })
 
+    const levelPlans: Record<string, { riskLevel: string; requireEvacuation: boolean; steps: string[] }> = {
+      info: {
+        riskLevel: '低风险',
+        requireEvacuation: false,
+        steps: ['通知现场人员检查情况', '记录异常数据', '持续监控传感器数据'],
+      },
+      warning: {
+        riskLevel: '一般风险',
+        requireEvacuation: false,
+        steps: ['立即通知当班班组长', '派出现场人员排查', '准备应急物资', '每15分钟汇报一次进展'],
+      },
+      danger: {
+        riskLevel: '较高风险',
+        requireEvacuation: true,
+        steps: ['立即启动应急预案', '通知危险区域人员撤离', '关闭相关设备和阀门', '通知区块主管和安全部门'],
+      },
+      critical: {
+        riskLevel: '严重风险',
+        requireEvacuation: true,
+        steps: ['立即启动最高级别应急预案', '全员紧急撤离至安全集合点', '紧急关闭所有相关阀门和设备', '同时通知公司管理层、消防、医疗、安监部门'],
+      },
+    }
+
     res.json({
       success: true,
-      data: alerts,
+      data: alerts.map((a) => {
+        const plan = levelPlans[a.level] || levelPlans.warning
+        return {
+          ...a,
+          emergencyPlan: {
+            riskLevel: plan.riskLevel,
+            requireEvacuation: plan.requireEvacuation,
+            steps: plan.steps,
+            planDetailUrl: `/api/safety/emergency-plan/${a.id}`,
+          },
+        }
+      }),
     })
   } catch (err) {
     res.status(500).json({

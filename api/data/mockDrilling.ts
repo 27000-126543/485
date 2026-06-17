@@ -105,7 +105,10 @@ export const generateMockDrillingData = (
   materialConfigs.forEach((config, index) => {
     const minStock = 50 + Math.floor(Math.random() * 150);
     const maxStock = minStock * 4 + Math.floor(Math.random() * 200);
-    const currentStock = Math.floor(minStock + Math.random() * (maxStock - minStock));
+    const isLowStock = index % 5 === 0 || index % 7 === 0;
+    const currentStock = isLowStock
+      ? Math.floor(minStock * (0.1 + Math.random() * 0.8))
+      : Math.floor(minStock + Math.random() * (maxStock - minStock));
 
     const material: MaterialStock = {
       id: generateId(),

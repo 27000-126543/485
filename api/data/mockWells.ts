@@ -94,6 +94,9 @@ export const generateMockBlocksAndWells = (users: User[]): { blocks: Block[]; te
       const wellId = generateId();
       team.wellIds.push(wellId);
 
+      const workerIndex = wellIndex % (team.memberIds.length || 1);
+      const workerId = team.memberIds[workerIndex] || '';
+
       const status = wellStatuses[Math.floor(Math.random() * wellStatuses.length)];
       const dailyProduction = status === 'producing' ? 50 + Math.random() * 80 : Math.random() * 10;
       const depth = 2000 + Math.random() * 3500;
@@ -108,6 +111,7 @@ export const generateMockBlocksAndWells = (users: User[]): { blocks: Block[]; te
         name: `${blockInfo.name}${wellIndex + 1}号井`,
         blockId,
         teamId: team.id,
+        workerId,
         depth: Math.round(depth * 100) / 100,
         pressure: Math.round(pressure * 100) / 100,
         temperature: Math.round(temperature * 100) / 100,
